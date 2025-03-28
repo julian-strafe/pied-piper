@@ -16,7 +16,6 @@
     "package-lock.json",
     "yarn.lock",
     "pnpm-lock.yaml",
-    "pied-piper.js",
     ".gitignore",
     ".prettierrc",
     ".eslintrc",

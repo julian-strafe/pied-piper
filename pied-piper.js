@@ -1,127 +1,129 @@
 const fs = require('fs')
 const path = require('path')
 
-// Default configuration
+// Default configuration (overridden by .piedpiper.json if present)
 const defaultConfig = {
   targetFolder: 'pipe',
   ignoredFolders: ['node_modules', 'pipe', '.git', 'dist'],
   ignoredFiles: [
     'package-lock.json',
-    'organize.js',
+    'pied-piper.js', // Ignore the script itself
     '.gitignore',
     '.prettierrc',
     '.env',
-    'README.md',
+    'README.md', // Ignore the project root README
     '.firebaserc',
   ],
   ignoredPatterns: ['*.log', '*.cache', '*.svg'],
-  extensionsToAppendTxt: ['.rules', '.jsx'],
+  extensionsToAppendTxt: ['.rules', '.jsx'], // Append .txt to these extensions and files with no extension
 }
 
-// Get filter argument if provided
-const filterArg = process.argv[2]
-if (filterArg) {
-  console.log(`Filtering files containing: ${filterArg}`)
-}
-
-// Load configuration from .piedpiper.json if it exists
+// --- Configuration Loading ---
 let config = { ...defaultConfig }
+const configPath = path.join(process.cwd(), '.piedpiper.json')
 try {
-  const configPath = path.join(process.cwd(), '.piedpiper.json')
   if (fs.existsSync(configPath)) {
     const userConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'))
-    config = {
-      ...defaultConfig,
-      ...userConfig,
-    }
+    config = { ...defaultConfig, ...userConfig } // User config overrides defaults
     console.log('Loaded configuration from .piedpiper.json')
   }
 } catch (error) {
   console.error('Error loading .piedpiper.json:', error)
-  console.log('Using default configuration')
+  console.log('Using default configuration.')
 }
 
-// Function to clear the target folder
+// --- Filter Argument ---
+const filterArg = process.argv[2]
+if (filterArg) {
+  console.log(`Filtering files where path/name contains: ${filterArg}`)
+}
+
+// --- Core Functions ---
+
 function clearTargetFolder() {
-  if (fs.existsSync(config.targetFolder)) {
-    console.log(`Clearing existing ${config.targetFolder} folder...`)
-    const files = fs.readdirSync(config.targetFolder)
-    for (const file of files) {
-      const filePath = path.join(config.targetFolder, file)
-      fs.unlinkSync(filePath)
-      console.log(`Deleted: ${filePath}`)
-    }
+  const target = config.targetFolder
+  if (fs.existsSync(target)) {
+    console.log(`Clearing existing target folder: ${target}`)
+    fs.readdirSync(target).forEach((file) => {
+      const filePath = path.join(target, file)
+      try {
+        // Avoid deleting the generated README if it exists and is the only thing left
+        if (
+          path.basename(filePath) !== 'README.md' ||
+          fs.readdirSync(target).length > 1
+        ) {
+          fs.unlinkSync(filePath)
+          // console.log(`Deleted: ${filePath}`); // Optional: more verbose logging
+        }
+      } catch (unlinkError) {
+        console.error(`Error deleting ${filePath}:`, unlinkError)
+      }
+    })
   } else {
-    console.log(`Creating target folder: ${config.targetFolder}`)
-    fs.mkdirSync(config.targetFolder)
+    console.log(`Creating target folder: ${target}`)
+    fs.mkdirSync(target, { recursive: true }) // Ensure parent dirs are created if needed
   }
 }
 
-// Function to check if a filename matches an ignored pattern
 function matchesIgnoredPattern(filename) {
   return config.ignoredPatterns.some((pattern) => {
     if (pattern.startsWith('*.')) {
-      const extension = pattern.slice(1) // e.g., ".log"
-      return filename.endsWith(extension)
+      return filename.endsWith(pattern.slice(1))
     }
+    // Add more complex pattern matching here if needed
     return false
   })
 }
 
-// Function to check if a file matches the filter
-function matchesFilter(filePath, relativePath) {
+function matchesFilter(fullPath, relativePath, originalName) {
   if (!filterArg) return true
-  const constructedName = relativePath
+  // Filter based on the constructed name (path_parts_originalName)
+  const folderParts = relativePath
     .split(path.sep)
     .filter((part) => part.length > 0)
-    .join('_')
-  return constructedName.toLowerCase().includes(filterArg.toLowerCase())
+  const constructedNameBase =
+    folderParts.length > 0
+      ? `${folderParts.join('_')}_${originalName}`
+      : originalName
+  return constructedNameBase.toLowerCase().includes(filterArg.toLowerCase())
 }
 
-// Function to create README.md in the pipe folder
-function createReadme() {
+function createInternalReadme() {
   const readmeContent = `# Pipe Folder Overview
 
-This folder contains a flattened version of a project directory structure, where all files have been copied from their original subdirectories into this single \`${
-    config.targetFolder
-  }\` folder. The purpose is to allow a Large Language Model (LLM) to ingest and understand the entire project structure in one shot by attaching these files.
+This folder contains a flattened version of the project structure from the parent directory, prepared for Large Language Model (LLM) ingestion.
 
 ## Naming Convention
-- Each file is renamed to reflect its original folder path.
-- Folder names are concatenated with underscores (\`_\`), followed by the original filename.
-- Example: A file originally at \`./functions/fetchTournaments/fetchTournaments.js\` becomes \`functions_fetchTournaments_fetchTournaments.js\`.
-- If a file was in the root directory, it retains its original name.
-- Special cases:
-  - Files with a \`.rules\` extension have \`.txt\` appended (e.g., \`myfile.rules\` becomes \`myfile.rules.txt\`).
-  - Files with no extension have \`.txt\` appended (e.g., \`myfile\` becomes \`myfile.txt\`).
+- Files are renamed to \`folder_subfolder_filename.ext\`.
+- Files from the root retain their original name.
+- Extensions in \`extensionsToAppendTxt\` (and files with no extension) have \`.txt\` appended (e.g., \`main.js\` -> \`main.js.txt\`, \`Dockerfile\` -> \`Dockerfile.txt\`).
 
-## Process
-1. The script clears this \`${
-    config.targetFolder
-  }\` folder (if it exists) or creates it (if it doesn't).
-2. It recursively crawls the parent directory, ignoring:
-   - Folders: ${config.ignoredFolders.join(', ')}
-   - Files: ${config.ignoredFiles.join(', ')}
-   - Patterns: ${config.ignoredPatterns.join(', ')}
-3. All other files are copied here with their new names, applying the extension rules above.
+## Source Configuration Used
+- **Target Folder:** ${config.targetFolder}
+- **Ignored Folders:** ${config.ignoredFolders.join(', ')}
+- **Ignored Files:** ${config.ignoredFiles.join(', ')}
+- **Ignored Patterns:** ${config.ignoredPatterns.join(', ')}
+- **Append .txt to:** ${config.extensionsToAppendTxt.join(
+    ', '
+  )} (and files with no extension)
 ${
   filterArg
-    ? `\n## Filter
-Only files containing "${filterArg}" in their path were included.`
+    ? `\n- **Filter Applied:** Only files containing "${filterArg}" in their path/name were included.`
     : ''
 }
 
-## Usage
-Attach all files in this folder to an LLM to provide a complete view of the project's codebase, with file paths embedded in the filenames for context.
+Generated by pied-piper.js
 `
   const readmePath = path.join(config.targetFolder, 'README.md')
-  fs.writeFileSync(readmePath, readmeContent)
-  console.log(`Created: ${readmePath}`)
+  try {
+    fs.writeFileSync(readmePath, readmeContent)
+    console.log(`Created internal README: ${readmePath}`)
+  } catch (error) {
+    console.error(`Error writing internal README: ${error}`)
+  }
 }
 
-// Function to process a directory
 function processDirectory(currentDir, baseDir) {
-  console.log(`Processing directory: ${currentDir}`)
   let items
   try {
     items = fs.readdirSync(currentDir)
@@ -130,13 +132,26 @@ function processDirectory(currentDir, baseDir) {
     return
   }
 
-  if (items.length === 0) {
-    console.log(`No items found in ${currentDir}`)
-  }
-
   for (const item of items) {
     const fullPath = path.join(currentDir, item)
-    const relativePath = path.relative(baseDir, currentDir)
+    // Construct relative path from the initial base directory
+    const relativePathToItem = path.relative(baseDir, fullPath)
+
+    // Skip target folder itself and globally ignored folders early
+    if (item === config.targetFolder || config.ignoredFolders.includes(item)) {
+      // console.log(`Skipping ignored folder directly: ${fullPath}`);
+      continue
+    }
+    // Skip if the item is within an ignored folder path segment
+    if (
+      config.ignoredFolders.some((ignored) =>
+        relativePathToItem.split(path.sep).includes(ignored)
+      )
+    ) {
+      // console.log(`Skipping item within ignored path: ${fullPath}`);
+      continue
+    }
+
     let stat
     try {
       stat = fs.statSync(fullPath)
@@ -145,55 +160,59 @@ function processDirectory(currentDir, baseDir) {
       continue
     }
 
-    // Skip ignored folders
-    if (
-      config.ignoredFolders.includes(item) ||
-      config.ignoredFolders.some((ignored) => relativePath.startsWith(ignored))
-    ) {
-      console.log(`Skipping ignored folder: ${fullPath}`)
-      continue
-    }
-
     if (stat.isDirectory()) {
-      // Recursively process subdirectories
-      processDirectory(fullPath, baseDir)
+      processDirectory(fullPath, baseDir) // Recurse
     } else if (stat.isFile()) {
+      const originalName = path.basename(item)
+      const relativeDirPath = path.relative(baseDir, currentDir) // Path relative to base, for naming
+
       // Skip ignored files or patterns
-      if (config.ignoredFiles.includes(item) || matchesIgnoredPattern(item)) {
-        console.log(`Skipping ignored file: ${fullPath}`)
+      if (
+        config.ignoredFiles.includes(originalName) ||
+        matchesIgnoredPattern(originalName)
+      ) {
+        // console.log(`Skipping ignored file/pattern: ${fullPath}`);
         continue
       }
 
-      // Check if file matches filter
-      if (!matchesFilter(fullPath, relativePath)) {
-        console.log(`Skipping file not matching filter: ${fullPath}`)
+      // Check filter
+      if (!matchesFilter(fullPath, relativeDirPath, originalName)) {
+        // console.log(`Skipping file not matching filter: ${fullPath}`);
         continue
       }
 
       // Construct new filename
-      const folderParts = relativePath
+      const folderParts = relativeDirPath
         .split(path.sep)
         .filter((part) => part.length > 0)
-      const originalName = path.basename(item)
       let newName =
         folderParts.length > 0
           ? `${folderParts.join('_')}_${originalName}`
           : originalName
 
-      // Handle special extension cases
-      const ext = path.extname(newName)
-      if (config.extensionsToAppendTxt.includes(ext)) {
-        newName += '.txt' // Append .txt to specified extensions
-      } else if (!ext) {
-        newName += '.txt' // Append .txt to files with no extension
+      // Handle extensions: Append .txt where needed
+      const ext = path.extname(originalName) // Check original extension
+      if (
+        config.extensionsToAppendTxt.includes(ext) ||
+        (!ext && originalName !== '.gitignore')
+      ) {
+        // Append .txt if in list or no extension (excluding special cases like .gitignore if desired)
+        newName += '.txt'
       }
 
       const targetPath = path.join(config.targetFolder, newName)
 
-      // Copy file to target location
+      // Copy file
       try {
+        // Ensure target directory exists before copying (relevant if targetFolder is nested)
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true })
         fs.copyFileSync(fullPath, targetPath)
-        console.log(`Copied: ${fullPath} -> ${targetPath}`)
+        console.log(
+          `Copied: ${path.relative(baseDir, fullPath)} -> ${path.join(
+            config.targetFolder,
+            newName
+          )}`
+        )
       } catch (error) {
         console.error(`Error copying ${fullPath} to ${targetPath}:`, error)
       }
@@ -201,13 +220,15 @@ function processDirectory(currentDir, baseDir) {
   }
 }
 
-// Start processing
-console.log('Starting file organization...')
+// --- Execution ---
+console.log('Starting Pied Piper file organization...')
 try {
-  clearTargetFolder() // Clear or create pipe folder first
-  processDirectory('.', '.')
-  createReadme() // Add README.md last
+  clearTargetFolder()
+  processDirectory('.', '.') // Start processing from the current directory
+  createInternalReadme()
   console.log('File organization complete!')
+  console.log(`Output generated in: ${config.targetFolder}`)
 } catch (error) {
-  console.error('An unexpected error occurred:', error)
+  console.error('An unexpected error occurred during processing:', error)
+  process.exit(1) // Exit with error code
 }
